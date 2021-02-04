@@ -28,7 +28,7 @@ class Fastly
       warn("DEPRECATION WARNING: Username/password authentication is deprecated
       and will not be available starting September 2020;
       please migrate to API tokens as soon as possible.")
-      
+
       if api_key.nil?
         fail Unauthorized, "Invalid auth credentials. Check api_key."
       end
@@ -58,8 +58,20 @@ class Fastly
       extras = params.delete(:headers) || {}
       include_auth = params.key?(:include_auth) ? params.delete(:include_auth) : true
       path += "?#{make_params(params)}" unless params.empty?
-      resp  = http.get(path, headers(extras, include_auth))
-      fail Error, resp.body unless resp.kind_of?(Net::HTTPSuccess)
+
+      tries = 0
+      begin
+        resp  = http.get(path, headers(extras, include_auth))
+        fail Error, resp.body unless resp.kind_of?(Net::HTTPSuccess)
+      rescue ::Fastly::Error => e
+        if tries < RETRY_COUNT && e.message.downcase.include?('something went wrong')
+          tries += 1
+          sleep(RETRY_TIME)
+          retry
+        else
+          raise
+        end
+      end
       JSON.parse(resp.body)
     end
 
@@ -85,8 +97,18 @@ class Fastly
     def delete(path, params = {})
       extras = params.delete(:headers) || {}
       include_auth = params.key?(:include_auth) ? params.delete(:include_auth) : true
-      resp  = http.delete(path, headers(extras, include_auth))
-      resp.kind_of?(Net::HTTPSuccess)
+      begin
+        resp  = http.delete(path, headers(extras, include_auth))
+        fail Error, resp.body unless resp.kind_of?(Net::HTTPSuccess)
+      rescue ::Fastly::Error => e
+        if tries < RETRY_COUNT && e.message.downcase.include?('something went wrong')
+          tries += 1
+          sleep(RETRY_TIME)
+          retry
+        end
+      ensure
+        return resp.kind_of?(Net::HTTPSuccess)
+      end
     end
 
     def purge(url, params = {})
@@ -100,9 +122,19 @@ class Fastly
         http.use_ssl = true
       end
 
-      resp   = http.request Net::HTTP::Purge.new(uri.request_uri, headers(extras))
-
-      fail Error, resp.body unless resp.kind_of?(Net::HTTPSuccess)
+      tries = 0
+      begin
+        resp   = http.request Net::HTTP::Purge.new(uri.request_uri, headers(extras))
+        fail Error, resp.body unless resp.kind_of?(Net::HTTPSuccess)
+      rescue ::Fastly::Error => e
+        if tries < RETRY_COUNT && e.message.downcase.include?('something went wrong')
+          tries += 1
+          sleep(RETRY_TIME)
+          retry
+        else
+          raise
+        end
+      end
       JSON.parse(resp.body)
     end
 
@@ -133,8 +165,19 @@ class Fastly
       extras = params.delete(:headers) || {}
       include_auth = params.key?(:include_auth) ? params.delete(:include_auth) : true
       query = make_params(params)
-      resp  = http.send(method, path, query, headers(extras, include_auth).merge('Content-Type' =>  'application/x-www-form-urlencoded'))
-      fail Error, resp.body unless resp.kind_of?(Net::HTTPSuccess)
+      tries = 0
+      begin
+        resp  = http.send(method, path, query, headers(extras, include_auth).merge('Content-Type' =>  'application/x-www-form-urlencoded'))
+        fail Error, resp.body unless resp.kind_of?(Net::HTTPSuccess)
+      rescue ::Fastly::Error => e
+        if tries < RETRY_COUNT && e.message.downcase.include?('something went wrong')
+          tries += 1
+          sleep(RETRY_TIME)
+          retry
+        else
+          raise
+        end
+      end
       JSON.parse(resp.body)
     end
 
