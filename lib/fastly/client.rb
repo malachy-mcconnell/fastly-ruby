@@ -11,13 +11,13 @@ class Fastly
 
     DEFAULT_URL = 'https://api.fastly.com'.freeze
     RETRY_TIME = 0.3
-    RETRY_COUNT = 3
 
-    attr_accessor :api_key, :base_url, :debug, :user, :password, :customer
+    attr_accessor :api_key, :base_url, :retries, :debug, :user, :password, :customer
 
     def initialize(opts)
       @api_key            = opts.fetch(:api_key, nil)
       @base_url           = opts.fetch(:base_url, DEFAULT_URL)
+      @retries            = opts.fetch(:retries, 0)
       @customer           = opts.fetch(:customer, nil)
       @oldpurge           = opts.fetch(:use_old_purge_method, false)
       @password           = opts.fetch(:password, nil)
@@ -52,15 +52,12 @@ class Fastly
       !(user.nil? || password.nil?)
     end
 
-    def get(path, params = {})
-      extras = params.delete(:headers) || {}
-      include_auth = params.key?(:include_auth) ? params.delete(:include_auth) : true
-      path += "?#{make_params(params)}" unless params.empty?
-
+    def with_retry
       tries = 0
       begin
-        resp  = http.get(path, headers(extras, include_auth))
+        resp = yield #request.call
         fail Error, resp.body unless resp.kind_of?(Net::HTTPSuccess)
+        return resp
       rescue ::Fastly::Error => e
         if should_retry(tries, e.message)
           tries += 1
@@ -70,6 +67,13 @@ class Fastly
           raise
         end
       end
+    end
+
+    def get(path, params = {})
+      extras = params.delete(:headers) || {}
+      include_auth = params.key?(:include_auth) ? params.delete(:include_auth) : true
+      path += "?#{make_params(params)}" unless params.empty?
+      resp = with_retry { http.get(path, headers(extras, include_auth)) }
       JSON.parse(resp.body)
     end
 
@@ -95,19 +99,8 @@ class Fastly
     def delete(path, params = {})
       extras = params.delete(:headers) || {}
       include_auth = params.key?(:include_auth) ? params.delete(:include_auth) : true
-      tries = 0
-      begin
-        resp  = http.delete(path, headers(extras, include_auth))
-        fail Error, resp.body unless resp.kind_of?(Net::HTTPSuccess)
-      rescue ::Fastly::Error => e
-        if should_retry(tries, e.message)
-          tries += 1
-          sleep(RETRY_TIME)
-          retry
-        end
-      ensure
-        return resp.kind_of?(Net::HTTPSuccess)
-      end
+      resp = with_retry { http.delete(path, headers(extras, include_auth)) }
+      return resp.kind_of?(Net::HTTPSuccess)
     end
 
     def purge(url, params = {})
@@ -121,19 +114,7 @@ class Fastly
         http.use_ssl = true
       end
 
-      tries = 0
-      begin
-        resp   = http.request Net::HTTP::Purge.new(uri.request_uri, headers(extras))
-        fail Error, resp.body unless resp.kind_of?(Net::HTTPSuccess)
-      rescue ::Fastly::Error => e
-        if should_retry(tries, e.message)
-          tries += 1
-          sleep(RETRY_TIME)
-          retry
-        else
-          raise
-        end
-      end
+      resp = with_retry { http.request Net::HTTP::Purge.new(uri.request_uri, headers(extras)) }
       JSON.parse(resp.body)
     end
 
@@ -206,7 +187,7 @@ class Fastly
     end
 
     def should_retry(tries, error_message)
-      (tries < RETRY_COUNT) && ( error_message.downcase.include?('something went wrong') || error_message.downcase.include?('i/o error') )
+      (tries < @retries) && ( error_message.downcase.include?('something went wrong') || error_message.downcase.include?('i/o error') )
     end
   end
 end

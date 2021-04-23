@@ -135,11 +135,11 @@ describe Fastly::Client do
   end
 
   describe 'retry when something goes wrong' do
-    let(:client) { Fastly::Client.new(api_key: api_key) }
+    let(:client) { Fastly::Client.new(api_key: api_key, retries: 3) }
     let(:something_wrong) {'{ "errors" : [{ "title" : "Unknown Error Occurred" , "detail" : "Something went wrong - please try again or contact support@fastly.com if it persists" }] }'}
     let(:io_error) {'{"error":"I/O error"}'}
     let(:normal_response) {'{"service_id":"621RhstXUziIWstbAR1","number":5}'}
-    let(:restful_methods) {[:get,:post,:put,:delete,:purge]}
+    let(:restful_methods) {[:get, :post, :put, :delete, :purge]}
 
     def stub(method,body_fivehundred, body_twohundred)
       stub_request(method, /api.fastly.com/)
@@ -168,12 +168,25 @@ describe Fastly::Client do
       end
     end
 
-    it 'fails if there are too many retries' do
+    it 'fails if there are not enough retries' do
       stub_request(:get, /api.fastly.com/)
       .to_return(
         {status: 500, body: something_wrong},
         {status: 500, body: io_error},
         {status: 500, body: something_wrong},
+        {status: 500, body: io_error},
+        {status: 200, body: normal_response}
+      )
+      error = assert_raises Fastly::Error do
+        client.get('/service/')
+      end
+      assert_equal '{"error":"I/O error"}', error.message
+    end
+
+    it 'fails if it can\'t retry' do
+      client = Fastly::Client.new(api_key: api_key)
+      stub_request(:get, /api.fastly.com/)
+      .to_return(
         {status: 500, body: io_error},
         {status: 200, body: normal_response}
       )
